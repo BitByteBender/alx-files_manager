@@ -1,5 +1,9 @@
+import { ObjectId } from 'mongodb';
 import crypto from 'crypto';
 import dbClient from '../utils/db';
+import redisClient from '../utils/redis';
+
+const sendUnauthorized = (res) => res.status(401).json({ error: 'Unauthorized' });
 
 class UsersController {
   static async postNew(req, res) {
@@ -19,6 +23,19 @@ class UsersController {
       id: rslt.insertedId.toString(),
       email,
     });
+  }
+
+  static async getMe(req, res) {
+    const key = req.header('X-Token');
+
+    if (!key || key.length === 0) return sendUnauthorized(res);
+
+    const sess = await redisClient.get(`auth_${key}`);
+    if (sess) {
+      const usr = await dbClient.db.collection('users').findOne({ _id: ObjectId(sess) });
+      if (usr) return res.status(200).json({ id: usr._id, email: usr.email });
+    }
+    return sendUnauthorized(res);
   }
 }
 
