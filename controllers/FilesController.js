@@ -8,6 +8,7 @@ import redisClient from '../utils/redis';
 const FOLDER_PATH = process.env.FOLDER_PATH || '/tmp/files_manager';
 const sendUnauth = (res) => res.status(401).json({ error: 'Unauthorized' });
 const sendCustomErr = (res, errNum, msg) => res.status(errNum).json({ error: msg });
+const mime = require('mime-types');
 
 class FilesController {
   static async postUpload(req, res) {
@@ -137,6 +138,63 @@ class FilesController {
       parentId: file.parentId,
       localPath: file.localPath,
     })));
+  }
+
+  static async putPublish(req, res) {
+    const token = req.header('X-Token');
+    if (!token) return sendUnauth(res);
+
+    const userId = await redisClient.get(`auth_${token}`);
+    if (!userId) return sendUnauth(res);
+
+    const { id } = req.params;
+    const file = await dbClient.db.collection('files').findOne({ _id: ObjectId(id), userId: ObjectId(userId) });
+
+    if (!file) return sendCustomErr(res, 404, 'Not found');
+    await dbClient.db.collection('files').updateOne({ _id: ObjectId(id) }, { $set: { isPublic: true } });
+    return res.status(200).json({ ...file, isPublic: true });
+  }
+
+  static async putUnpublish(req, res) {
+    const token = req.header('X-Token');
+    if (!token) return sendUnauth(res);
+
+    const userId = await redisClient.get(`auth_${token}`);
+    if (!userId) return sendUnauth(res);
+
+    const { id } = req.params;
+    const file = await dbClient.db.collection('files').findOne({ _id: ObjectId(id), userId: ObjectId(userId) });
+
+    if (!file) return sendCustomErr(res, 404, 'Not found');
+    await dbClient.db.collection('files').updateOne({ _id: ObjectId(id) }, { $set: { isPublic: false } });
+    return res.status(200).json({ ...file, isPublic: false });
+  }
+
+  static async getFile(req, res) {
+    const { id } = req.params;
+
+    if (!id || id === '' || !ObjectId.isValid(id)) return sendCustomErr(res, 404, 'Not found');
+
+    const file = await dbClient.db.collection('files').findOne({ _id: ObjectId(id) });
+    if (!file) return sendCustomErr(res, 404, 'Not found');
+    if (file.type === 'folder') return sendCustomErr(res, 400, 'A folder doesn\'t have content');
+
+    if (!file.isPublic) {
+      const token = req.header('X-Token');
+      if (!token) return sendCustomErr(res, 404, 'Not found');
+
+      const sess = await redisClient.get(`auth_${token}`);
+      if (!sess || sess.length === 0 || sess !== file.userId.toString()) {
+        return sendCustomErr(res, 404, 'Not found');
+      }
+    }
+
+    if (!fs.existsSync(file.localPath)) return sendCustomErr(res, 404, 'Not found');
+
+    const type = mime.contentType(file.name);
+    const charset = type ? type.split('=')[1] : 'utf-8';
+    const data = fs.readFileSync(file.localPath, charset);
+    return res.send(data);
   }
 }
 
